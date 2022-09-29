@@ -2,6 +2,7 @@ package goproxy
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -180,12 +181,26 @@ func (proxy *ProxyHttpServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		if origBody != resp.Body {
 			resp.Header.Del("Content-Length")
 		}
-		copyHeaders(w.Header(), resp.Header, proxy.KeepDestinationHeaders)
-		w.WriteHeader(resp.StatusCode)
-		nr, err := io.Copy(w, resp.Body)
-		if err := resp.Body.Close(); err != nil {
-			ctx.Warnf("Can't close response body %v", err)
+
+		// Write version, status, and headers
+		if _, err := fmt.Fprintf(w, "HTTP/%d.%d %03d %s\r\n", resp.ProtoMajor, resp.ProtoMinor, resp.StatusCode, http.StatusText(resp.StatusCode)); err != nil {
+			ctx.Warnf("Unable to write response status and headers: %v", err)
+			return
 		}
+		resp.Header.Write(w)
+
+		// Copy body to reponsewriter
+ 		nr, err := io.Copy(w, resp.Body)
+		if err != nil {
+			ctx.Warnf("Copy failed at %d bytes with err %v", nr, err)
+		}
+
+		// Close the response body
+ 		if err := resp.Body.Close(); err != nil {
+ 			ctx.Warnf("Can't close response body %v", err)
+ 		}
+
+		// Traffic accounting/bytes received
 		ctx.BytesReceived += nr
 		ctx.Logf("Copied %v bytes to client error=%v", nr, err)
 		ctx.Logf("Copied %v bytes from client error=%v", ctx.BytesSent, err)
